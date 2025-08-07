@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>State Approval Rate Gaps - True Full Screen</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://d3js.org/topojson.v3.min.js"></script>
+    <style>
+        body { 
+            margin: 0;
+            padding: 0;
+            background-color: #fff;
+            overflow: hidden;
+        }
+        
+        #map { 
+            width: 100vw;
+            height: 100vh;
+            background-color: #fff;
+        }
+        
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        .year-btn {
+            display: block;
+            width: 100%;
+            background: #f8f9fa;
+            color: #333;
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            margin: 2px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        
+        .year-btn:hover {
+            background: #e9ecef;
+        }
+        
+        .year-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="controls">
+        <div class="year-buttons">
+            <button class="year-btn active" data-year="2018">2018</button>
+            <button class="year-btn" data-year="2019">2019</button>
+            <button class="year-btn" data-year="2020">2020</button>
+            <button class="year-btn" data-year="2021">2021</button>
+            <button class="year-btn" data-year="2022">2022</button>
+            <button class="year-btn" data-year="2023">2023</button>
+            <button class="year-btn" data-year="2024">2024</button>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let svg, g, path, colorScale;
+        let currentYear = 2018;
+        let mapData = {};
+        
+        // Color scale for gaps
+        function createColorScale() {
+            return d3.scaleThreshold()
+                .domain([0, 0.05, 0.10, 0.15])
+                .range(['#d9ef8b', '#fee08b', '#fd8d3c', '#d73027', '#8b0000']);
+        }
+        
+        // Load and process data
+        async function loadData() {
+            const response = await fetch('data/state_race_summary.csv');
+            const csvText = await response.text();
+            const data = d3.csvParse(csvText);
+            
+            // Process data by year
+            const years = [2018, 2019, 2020, 2021, 2022, 2023, 2024];
+            
+            years.forEach(year => {
+                mapData[year] = {};
+                const yearData = data.filter(d => d.activity_year == year);
+                
+                // Calculate gaps for each state
+                const states = [...new Set(yearData.map(d => d.state_code))];
+                
+                states.forEach(stateCode => {
+                    const stateData = yearData.filter(d => d.state_code === stateCode);
+                    const whiteData = stateData.find(d => d.race_label === 'White');
+                    const blackData = stateData.find(d => d.race_label === 'Black');
+                    
+                    if (whiteData && blackData) {
+                        const whiteRate = parseFloat(whiteData.approval_rate);
+                        const blackRate = parseFloat(blackData.approval_rate);
+                        const gap = whiteRate - blackRate;
+                        
+                        mapData[year][stateCode] = {
+                            gap: gap,
+                            whiteRate: whiteRate,
+                            blackRate: blackRate
+                        };
+                    }
+                });
+            });
+        }
+        
+        // Create the map
+        async function createMap() {
+            // Load data
+            await loadData();
+            
+            // Create color scale
+            colorScale = createColorScale();
+            
+            // Set up the map
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            
+            svg = d3.select("#map")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height);
+            
+            g = svg.append("g");
+            
+            // Load US states topology
+            const us = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
+            
+            // Create projection
+            const projection = d3.geoAlbersUsa()
+                .fitSize([width, height], topojson.feature(us, us.objects.states));
+            
+            // Create path generator
+            path = d3.geoPath().projection(projection);
+            
+            // Draw states
+            g.selectAll("path")
+                .data(topojson.feature(us, us.objects.states).features)
+                .enter()
+                .append("path")
+                .attr("d", path)
+                .attr("fill", d => {
+                    const stateCode = getStateCode(d.properties.name);
+                    const yearData = mapData[currentYear];
+                    if (yearData && yearData[stateCode]) {
+                        return colorScale(yearData[stateCode].gap);
+                    }
+                    return "#f0f0f0";
+                })
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 0.5);
+            
+            // Update for initial year
+            updateMap(2018);
+        }
+        
+        // Update map for a specific year
+        function updateMap(year) {
+            currentYear = year;
+            
+            g.selectAll("path")
+                .attr("fill", d => {
+                    const stateCode = getStateCode(d.properties.name);
+                    const yearData = mapData[year];
+                    if (yearData && yearData[stateCode]) {
+                        return colorScale(yearData[stateCode].gap);
+                    }
+                    return "#f0f0f0";
+                });
+        }
+        
+        // State name to code mapping
+        function getStateCode(stateName) {
+            const stateMap = {
+                'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
+                'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
+                'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
+                'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
+                'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
+                'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
+                'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
+                'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
+                'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT',
+                'Virginia': 'VA', 'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
+            };
+            return stateMap[stateName];
+        }
+        
+        // Event listeners for year buttons
+        document.querySelectorAll('.year-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                const year = parseInt(this.dataset.year);
+                
+                // Update active button
+                document.querySelectorAll('.year-btn').forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+                
+                // Update map
+                updateMap(year);
+            });
+        });
+        
+        // Initialize the map
+        createMap();
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            
+            svg.attr("width", width).attr("height", height);
+            
+            // Recreate projection and path
+            const us = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
+            const projection = d3.geoAlbersUsa()
+                .fitSize([width, height], topojson.feature(us, us.objects.states));
+            path = d3.geoPath().projection(projection);
+            
+            // Update paths
+            g.selectAll("path").attr("d", path);
+        });
+    </script>
+</body>
+</html> 
